@@ -1,0 +1,9 @@
+# Ignore node modules and logs
+node_modules/
+*.log
+.DS_Store
+.env
+
+# Optional: ignore packaged archives
+dist/
+build/
