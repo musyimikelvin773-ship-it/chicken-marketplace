@@ -34,15 +34,22 @@ export default async function handler(req, res) {
       body: JSON.stringify(payload)
     });
 
-    const json = await r.json();
+    const json = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return res.status(r.status || 502).json({ error: 'Vercel Blob create failed', detail: json });
+      // Return full details from Vercel to aid debugging (do not include secrets)
+      console.error('Vercel Blob create failed', { status: r.status, statusText: r.statusText, detail: json });
+      return res.status(r.status || 502).json({
+        error: 'Vercel Blob create failed',
+        status: r.status,
+        statusText: r.statusText,
+        detail: json
+      });
     }
 
     // Return the blob create response to the client (contains uploadURL and id/url)
     return res.status(200).json(json);
   } catch (err) {
     console.error('Error requesting Vercel Blob upload URL', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error', detail: err && err.message ? err.message : String(err) });
   }
 }
