@@ -50,11 +50,38 @@
         @media(min-width:700px){ .market-container{grid-template-columns:repeat(2,1fr)} .card img{height:160px} }
         @media(min-width:1100px){ .market-container{grid-template-columns:repeat(3,1fr)} .card img{height:180px} }
     </style>
+    </style>
 </head>
 <body>
 
-    <div class="header">
-        <h1>Kienyeji Market</h1>
+    <header class="header">
+        <div class="brand">
+            <img src="" alt="" aria-hidden="true" style="width:36px;height:36px;border-radius:6px;background:#fff;display:inline-block"> 
+            <h1>Kienyeji Marketplace</h1>
+        </div>
+        <div class="search-box">
+            <input id="searchInput" placeholder="Search breed, location..." />
+        </div>
+        <div class="nav-actions">
+            <div id="accountArea">
+                <button id="loginBtn">Login</button>
+            </div>
+            <button id="sellBtn" class="btn-sell">Sell</button>
+        </div>
+    </header>
+
+    <!-- Auth modal (hidden by default) -->
+    <div id="authModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); align-items:center; justify-content:center; z-index:60">
+        <div style="background:#fff; padding:18px; border-radius:8px; width:320px; max-width:90%">
+            <h3 id="authTitle">Sign In</h3>
+            <input id="authEmail" type="email" placeholder="Email" style="width:100%; padding:8px; margin-bottom:8px">
+            <input id="authPassword" type="password" placeholder="Password" style="width:100%; padding:8px; margin-bottom:8px">
+            <div style="display:flex; gap:8px">
+                <button id="authSignIn" style="flex:1">Sign In</button>
+                <button id="authSignUp" style="flex:1">Sign Up</button>
+            </div>
+            <div style="text-align:right; margin-top:8px"><button id="authClose">Close</button></div>
+        </div>
     </div>
     <div class="form-container">
     <h3>Post a New Chicken</h3>
@@ -96,7 +123,104 @@
             </div>
         </div>
     </div>
+<!-- Third-party libraries: Supabase (Auth + DB) and jsPDF for receipts -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
+    // Supabase config - replace with your project values
+    const SUPABASE_URL = 'https://YOUR_SUPABASE_URL.supabase.co';
+    const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+    let supabase = null;
+    try {
+        if (SUPABASE_URL && SUPABASE_ANON_KEY) supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } catch (e) {
+        console.warn('Supabase not configured or failed to load', e);
+    }
+
+    // Simple auth modal wiring
+    const authModal = document.getElementById('authModal');
+    const loginBtn = document.getElementById('loginBtn');
+    const authClose = document.getElementById('authClose');
+    const authSignIn = document.getElementById('authSignIn');
+    const authSignUp = document.getElementById('authSignUp');
+
+    function openAuth() { authModal.style.display = 'flex'; }
+    function closeAuth() { authModal.style.display = 'none'; }
+    loginBtn.addEventListener('click', openAuth);
+    authClose.addEventListener('click', closeAuth);
+
+    async function signUp() {
+        if (!supabase) return alert('Supabase not configured');
+        const email = document.getElementById('authEmail').value;
+        const password = document.getElementById('authPassword').value;
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) alert('Sign up error: ' + error.message); else { alert('Check your email for confirmation'); closeAuth(); }
+    }
+    async function signIn() {
+        if (!supabase) return alert('Supabase not configured');
+        const email = document.getElementById('authEmail').value;
+        const password = document.getElementById('authPassword').value;
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) alert('Sign in error: ' + error.message); else { alert('Signed in'); closeAuth(); updateAuthUI(); }
+    }
+    authSignUp.addEventListener('click', signUp);
+    authSignIn.addEventListener('click', signIn);
+
+    async function signOut() {
+        if (!supabase) return;
+        await supabase.auth.signOut();
+        updateAuthUI();
+    }
+
+    // Update header account area based on auth state
+    function updateAuthUI() {
+        const accountArea = document.getElementById('accountArea');
+        if (!supabase) return;
+        const user = supabase.auth.getUser ? supabase.auth.getUser() : null;
+        // supabase.auth.getUser() returns a Promise in new lib; check token via session
+        supabase.auth.getSession().then(({ data }) => {
+            const session = data.session;
+            if (session && session.user) {
+                accountArea.innerHTML = `<span style="margin-right:8px">${session.user.email}</span><button id=signOutBtn>Logout</button>`;
+                document.getElementById('signOutBtn').addEventListener('click', signOut);
+                document.querySelector('.form-container').style.display = 'block';
+            } else {
+                accountArea.innerHTML = `<button id="loginBtn">Login</button>`;
+                document.getElementById('loginBtn').addEventListener('click', openAuth);
+                // hide form for non-logged users
+                document.querySelector('.form-container').style.display = 'none';
+            }
+        });
+    }
+
+    // Show sell button behavior
+    document.getElementById('sellBtn').addEventListener('click', () => { document.querySelector('.form-container').scrollIntoView({ behavior: 'smooth' }); openAuth(); });
+
+    // Initialize UI state
+    updateAuthUI();
+
+    // If Supabase is configured, fetch chickens from DB; otherwise use localStorage
+    async function fetchChickens() {
+        if (supabase) {
+            try {
+                const { data, error } = await supabase.from('chickens').select('*').order('created_at', { ascending: false });
+                if (error) {
+                    console.warn('Supabase fetch error, falling back to localStorage', error.message);
+                } else if (data) {
+                    chickenStock = data.map(d => ({ breed: d.breed, price: d.price, location: d.location, age: d.age || 'N/A', image: d.image || DEFAULT_IMAGE, id: d.id, user_id: d.user_id }));
+                    renderMarket();
+                    return;
+                }
+            } catch (e) {
+                console.error('Error fetching from Supabase', e);
+            }
+        }
+        // fallback to local storage render
+        renderMarket();
+    }
+
+    fetchChickens();
+
     // Persist chickenStock in localStorage so listings survive reloads
     const STORAGE_KEY = 'chickenStock';
     const DEFAULT_IMAGE = 'https://source.unsplash.com/featured/?chicken';
@@ -144,7 +268,9 @@
 
         if (!createResp.ok) {
             const err = await createResp.json().catch(() => ({}));
-            throw new Error(err.error || 'Failed to create upload URL');
+            const detail = err.detail ? (err.detail.message || JSON.stringify(err.detail)) : '';
+            const msg = (err.error || 'Failed to create upload URL') + (detail ? ' - ' + detail : '');
+            throw new Error(msg);
         }
 
         const createJson = await createResp.json();
@@ -180,7 +306,7 @@
                         <p class="price-tag">KES ${isNaN(price) ? chicken.price : price.toLocaleString()}</p>
                     </div>
                     <div class="card-actions">
-                        <button class="view-btn" onclick="alert('Viewing details for ${chicken.breed}')">View Details</button>
+                        <button class="view-btn" onclick="buyNow(${index})">Buy Now</button>
                         <button class="contact-btn" onclick="contactSeller('${chicken.breed}')">Contact Seller</button>
                     </div>
                 </div>
@@ -258,6 +384,54 @@
 
     function contactSeller(breed) {
         alert("Interested in " + breed + "? Connecting you to the seller...");
+    }
+
+    // Simulate M-Pesa STK Push flow by calling serverless /api/mpesa
+    async function buyNow(index) {
+        const chicken = chickenStock[index];
+        if (!chicken) return alert('Item not found');
+        let phone = prompt('Enter your phone number (e.g. 2547xxxxxxxx):');
+        if (!phone) return;
+        const amount = chicken.price || 0;
+        try {
+            const resp = await fetch('/api/mpesa', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ phone, amount, item: chicken.breed }) });
+            const json = await resp.json();
+            if (!resp.ok) {
+                alert('Payment failed: ' + (json && (json.error || JSON.stringify(json))));
+                return;
+            }
+            // Payment success - generate receipt
+            const order = { id: json.transactionId || json.id || ('ORD' + Date.now()), breed: chicken.breed, price: amount, phone };
+            generateReceipt(order);
+            alert('Payment successful — receipt downloaded');
+        } catch (e) {
+            console.error('Payment error', e);
+            alert('Payment error: ' + e.message);
+        }
+    }
+
+    function generateReceipt(order) {
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            // Simple layout
+            doc.setFontSize(18);
+            doc.setTextColor(45,106,79);
+            doc.text('Kienyeji Marketplace', 20, 20);
+            doc.setFontSize(12);
+            doc.setTextColor(0,0,0);
+            doc.text('Order ID: ' + order.id, 20, 36);
+            doc.text('Breed: ' + order.breed, 20, 46);
+            doc.text('Price: KES ' + order.price, 20, 56);
+            doc.text('Phone: ' + order.phone, 20, 66);
+            // Paid watermark
+            doc.setTextColor(200,200,200);
+            doc.setFontSize(48);
+            doc.text('PAID', 40, 140, { angle: 45 });
+            doc.save('receipt_' + order.id + '.pdf');
+        } catch (e) {
+            console.error('Receipt generation failed', e);
+        }
     }
 
     // Initial render
