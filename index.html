@@ -62,6 +62,8 @@
     <input type="number" id="priceInput" placeholder="Price (KES)" style="display:block; margin-bottom:10px; width:100%;">
     <input type="text" id="locationInput" placeholder="Location" style="display:block; margin-bottom:10px; width:100%;">
     <input type="text" id="imageInput" placeholder="Image URL (optional)" style="display:block; margin-bottom:10px; width:100%;">
+    <!-- Optional file upload: will be uploaded to Vercel Blob via /api/upload -->
+    <input type="file" id="imageFileInput" accept="image/*" style="display:block; margin-bottom:10px; width:100%;">
     <button id="addBtn" class="contact-btn">Post to Market</button>
 </div>
 
@@ -125,6 +127,42 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(chickenStock));
     }
 
+    // Upload a File object to the server which creates a Vercel Blob upload URL.
+    // Returns the final blob URL on success.
+    async function uploadFile(file) {
+        // Basic validation
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (!file.type.startsWith('image/')) throw new Error('Only image files are allowed');
+        if (file.size > maxSize) throw new Error('File is too large (max 5MB)');
+
+        // Request an upload URL from our serverless endpoint
+        const createResp = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type })
+        });
+
+        if (!createResp.ok) {
+            const err = await createResp.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to create upload URL');
+        }
+
+        const createJson = await createResp.json();
+        const uploadURL = createJson.uploadURL || createJson.upload_url || createJson.uploadUrl;
+        const publicUrl = createJson.url || createJson.publicUrl || createJson.fileUrl || createJson.file_url;
+
+        if (!uploadURL) throw new Error('No upload URL returned from server');
+
+        // PUT the file bytes directly to the uploadURL
+        const putResp = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+        if (!putResp.ok) {
+            throw new Error('Upload failed with status ' + putResp.status);
+        }
+
+        // If the create endpoint returned a public URL, return it; otherwise return undefined
+        return publicUrl || createJson.id || null;
+    }
+
     function renderMarket() {
         const container = document.querySelector('.market-container');
         container.innerHTML = ''; // Clear the screen first
@@ -151,40 +189,71 @@
     }
 
     // Add-to-market logic: store numbers correctly and persist
-    document.getElementById('addBtn').addEventListener('click', () => {
-        const breedVal = document.getElementById('breedInput').value.trim();
-        const priceVal = document.getElementById('priceInput').value;
-        const locationVal = document.getElementById('locationInput').value.trim();
-        let imageVal = document.getElementById('imageInput').value.trim();
+    document.getElementById('addBtn').addEventListener('click', async () => {
+        const addBtn = document.getElementById('addBtn');
+        addBtn.disabled = true;
+        addBtn.textContent = 'Posting...';
+        try {
+            const breedVal = document.getElementById('breedInput').value.trim();
+            const priceVal = document.getElementById('priceInput').value;
+            const locationVal = document.getElementById('locationInput').value.trim();
+            let imageVal = document.getElementById('imageInput').value.trim();
+            const fileInput = document.getElementById('imageFileInput');
+            const file = fileInput && fileInput.files && fileInput.files[0];
 
-        // If the user typed a URL without protocol (e.g. "example.com/img.jpg"),
-        // prepend https:// so the browser treats it as an absolute URL.
-        if (imageVal && !/^https?:\/\//i.test(imageVal)) {
-            imageVal = 'https://' + imageVal;
+            // If the user typed a URL without protocol (e.g. "example.com/img.jpg"),
+            // prepend https:// so the browser treats it as an absolute URL.
+            if (imageVal && !/^https?:\/\//i.test(imageVal)) {
+                imageVal = 'https://' + imageVal;
+            }
+
+            if (!breedVal || priceVal === "") {
+                alert("Please fill in the breed and price!");
+                return;
+            }
+
+            // If a file is provided, upload it to Vercel Blob via our serverless API
+            let finalImage = imageVal || '';
+            if (file) {
+                try {
+                    const uploaded = await uploadFile(file);
+                    // uploadFile returns either a public url or an id; prefer public url
+                    if (uploaded && uploaded.startsWith && uploaded.startsWith('http')) {
+                        finalImage = uploaded;
+                    } else if (typeof uploaded === 'string' && uploaded.length > 0) {
+                        // If server returned only an id, construct a fallback URL placeholder
+                        finalImage = uploaded; // store id so you can resolve server-side later
+                    }
+                } catch (err) {
+                    console.error('Upload failed', err);
+                    alert('Image upload failed: ' + err.message);
+                    return;
+                }
+            }
+
+            const newChicken = {
+                breed: breedVal,
+                price: Number(priceVal), // store as number
+                location: locationVal || 'Unknown',
+                age: "New Entry",
+                image: finalImage || DEFAULT_IMAGE
+            };
+
+            chickenStock.push(newChicken);
+            saveStock();
+            renderMarket();
+
+            // clear inputs
+            document.getElementById('breedInput').value = '';
+            document.getElementById('priceInput').value = '';
+            document.getElementById('locationInput').value = '';
+            document.getElementById('imageInput').value = '';
+            if (fileInput) fileInput.value = '';
+
+        } finally {
+            addBtn.disabled = false;
+            addBtn.textContent = 'Post to Market';
         }
-
-        if (!breedVal || priceVal === "") {
-            alert("Please fill in the breed and price!");
-            return;
-        }
-
-        const newChicken = {
-            breed: breedVal,
-            price: Number(priceVal), // store as number
-            location: locationVal || 'Unknown',
-            age: "New Entry",
-            image: imageVal || DEFAULT_IMAGE
-        };
-
-        chickenStock.push(newChicken);
-        saveStock();
-        renderMarket();
-
-        // clear inputs
-        document.getElementById('breedInput').value = '';
-        document.getElementById('priceInput').value = '';
-        document.getElementById('locationInput').value = '';
-        document.getElementById('imageInput').value = '';
     });
 
     function contactSeller(breed) {
